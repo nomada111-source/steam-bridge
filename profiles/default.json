@@ -1,0 +1,73 @@
+{
+  "name": "default",
+  "description": "",
+  "buttons": {
+    "A": "A",
+    "B": "B",
+    "X": "X",
+    "Y": "Y",
+    "L1": "LB",
+    "R1": "RB",
+    "L2": "LT",
+    "R2": "RT",
+    "L5": "LB",
+    "R5": "RB",
+    "VIEW": "BACK",
+    "MENU": "START",
+    "STEAM": "GUIDE",
+    "QUICK_ACCESS": "GUIDE",
+    "LEFT_STICK_CLICK": "LS",
+    "RIGHT_STICK_CLICK": "RS",
+    "LEFT_PAD_CLICK": "LS",
+    "RIGHT_PAD_CLICK": "RS",
+    "DPAD_UP": "DPAD_UP",
+    "DPAD_DOWN": "DPAD_DOWN",
+    "DPAD_LEFT": "DPAD_LEFT",
+    "DPAD_RIGHT": "DPAD_RIGHT"
+  },
+  "left_stick": {
+    "deadzone": 0.1,
+    "saturation": 0.98,
+    "invert_x": false,
+    "invert_y": false,
+    "sensitivity": 1.0
+  },
+  "right_stick": {
+    "deadzone": 0.1,
+    "saturation": 0.98,
+    "invert_x": false,
+    "invert_y": false,
+    "sensitivity": 1.0
+  },
+  "left_pad": {
+    "deadzone": 0.05,
+    "saturation": 0.98,
+    "invert_x": false,
+    "invert_y": false,
+    "sensitivity": 1.0
+  },
+  "right_pad": {
+    "deadzone": 0.05,
+    "saturation": 0.98,
+    "invert_x": false,
+    "invert_y": false,
+    "sensitivity": 1.0
+  },
+  "left_trigger": {
+    "deadzone": 0.02,
+    "saturation": 0.98
+  },
+  "right_trigger": {
+    "deadzone": 0.02,
+    "saturation": 0.98
+  },
+  "gyro": {
+    "enabled": false,
+    "activate_button": "RIGHT_PAD_TOUCH",
+    "pitch_to_y": 0.0,
+    "yaw_to_x": 1.2,
+    "roll_to_x": 0.0
+  },
+  "left_pad_routes_to": "NONE",
+  "right_pad_routes_to": "NONE"
+}
