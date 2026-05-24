@@ -41,3 +41,12 @@ profiles/_settings.json
 
 # Logs
 *.log
+
+# --- PyInstaller build artifacts ---
+build/
+dist/
+*.manifest
+# Keep the canonical SteamPadBridge.spec checked in (it's our build recipe);
+# ignore PyInstaller's auto-generated spec files for one-off invocations.
+*.spec
+!SteamPadBridge.spec

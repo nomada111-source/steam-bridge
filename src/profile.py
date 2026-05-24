@@ -16,6 +16,7 @@ The default profile produces a sensible Xbox-controller layout.
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,20 @@ from typing import Any
 from .protocol import Btn
 
 
-PROFILES_DIR = Path(__file__).resolve().parent.parent / "profiles"
+def _app_dir() -> Path:
+    """Directory where user-writable data (profiles, settings) should live.
+
+    - When running from source: project root (parent of `src/`).
+    - When running as a PyInstaller --onefile bundle: directory of the .exe,
+      so the user can drop the exe anywhere and the profiles folder appears
+      next to it.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+PROFILES_DIR = _app_dir() / "profiles"
 
 
 # ----- Default mapping ------------------------------------------------------

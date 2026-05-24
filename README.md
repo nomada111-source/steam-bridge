@@ -49,6 +49,16 @@ The new controller does **not** have a separate VIEW/back/minus button — only 
 
 ## Setup
 
+### Option A — prebuilt single-file `.exe` (recommended for end users)
+
+1. Install the [ViGEmBus driver](https://github.com/nefarius/ViGEmBus/releases) (one-time).
+2. Download `SteamPadBridge.exe` from the [latest release](../../releases/latest).
+3. Drop it in any folder, double-click to run.
+
+That's it — no Python install required. The exe creates a `profiles/` subfolder next to itself on first run to store mappings.
+
+### Option B — run from source (for hacking on the code)
+
 ```powershell
 git clone https://github.com/nomada111-source/steampad-bridge.git
 cd steampad-bridge
@@ -65,9 +75,22 @@ python -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
+### Option C — build your own .exe
+
+```powershell
+.\setup.bat        # one-time, sets up .venv
+.\build.bat        # produces dist\SteamPadBridge.exe (~45 MB)
+```
+
+Uses PyInstaller with the spec file in `SteamPadBridge.spec` (commit-tracked, so the build is reproducible).
+
 ---
 
 ## Run
+
+If you downloaded the prebuilt .exe, just double-click `SteamPadBridge.exe`.
+
+From source:
 
 ```powershell
 .\run.bat
