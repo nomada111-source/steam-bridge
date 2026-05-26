@@ -54,7 +54,9 @@ DEFAULT_BUTTON_MAP: dict[str, str] = {
     "R1": "RB",
     "L2": "LT",      # analog trigger; mapper treats LT/RT specially
     "R2": "RT",
-    "L5": "LB",      # rear paddle defaults — feel free to remap in the GUI
+    "L4": "LB",      # inner-rear paddle defaults — feel free to remap in GUI
+    "R4": "RB",
+    "L5": "LB",
     "R5": "RB",
     "VIEW": "BACK",
     "MENU": "START",
@@ -68,6 +70,14 @@ DEFAULT_BUTTON_MAP: dict[str, str] = {
     "DPAD_DOWN": "DPAD_DOWN",
     "DPAD_LEFT": "DPAD_LEFT",
     "DPAD_RIGHT": "DPAD_RIGHT",
+    # Capacitive touch sensors — usually left unmapped, but available for
+    # advanced setups (e.g. "show HUD while right grip is touched").
+    "LEFT_STICK_TOUCH": "NONE",
+    "RIGHT_STICK_TOUCH": "NONE",
+    "LEFT_PAD_TOUCH": "NONE",
+    "RIGHT_PAD_TOUCH": "NONE",
+    "LEFT_GRIP_TOUCH": "NONE",
+    "RIGHT_GRIP_TOUCH": "NONE",
 }
 
 # Every physical button we recognise. Order matters for the GUI's editor.
@@ -93,6 +103,8 @@ BTN_NAME_TO_FLAG: dict[str, Btn] = {
     "R1": Btn.R1,
     "L2": Btn.L2,
     "R2": Btn.R2,
+    "L4": Btn.L4,
+    "R4": Btn.R4,
     "L5": Btn.L5,
     "R5": Btn.R5,
     "VIEW": Btn.VIEW,
@@ -103,6 +115,12 @@ BTN_NAME_TO_FLAG: dict[str, Btn] = {
     "RIGHT_STICK_CLICK": Btn.RIGHT_STICK_CLICK,
     "LEFT_PAD_CLICK": Btn.LEFT_PAD_CLICK,
     "RIGHT_PAD_CLICK": Btn.RIGHT_PAD_CLICK,
+    "LEFT_STICK_TOUCH": Btn.LEFT_STICK_TOUCH,
+    "RIGHT_STICK_TOUCH": Btn.RIGHT_STICK_TOUCH,
+    "LEFT_PAD_TOUCH": Btn.LEFT_PAD_TOUCH,
+    "RIGHT_PAD_TOUCH": Btn.RIGHT_PAD_TOUCH,
+    "LEFT_GRIP_TOUCH": Btn.LEFT_GRIP_TOUCH,
+    "RIGHT_GRIP_TOUCH": Btn.RIGHT_GRIP_TOUCH,
     "DPAD_UP": Btn.DPAD_UP,
     "DPAD_DOWN": Btn.DPAD_DOWN,
     "DPAD_LEFT": Btn.DPAD_LEFT,

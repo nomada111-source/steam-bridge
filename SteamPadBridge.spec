@@ -34,9 +34,11 @@ a = Analysis(
         # only imported via from-string lookups inside Qt; list them so the
         # frozen bundle definitely contains them.
         "src.gui.main_window",
-        "src.gui.device_panel",
+        "src.gui.bridge_bar",
         "src.gui.mapping_editor",
         "src.gui.visualizer",
+        "src.gui.settings_panel",
+        "src.gui.first_run",
         "src.app",
         "src.protocol",
         "src.mapper",
@@ -45,6 +47,9 @@ a = Analysis(
         "src.virtual_gamepad",
         "src.keyboard_hook",
         "src.settings",
+        "src.autostart",
+        "src.foreground_watcher",
+        "src.rumble",
     ],
     hookspath=[],
     hooksconfig={},

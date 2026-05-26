@@ -7,27 +7,36 @@ so the bridge can also be driven from a CLI or tests.
 from __future__ import annotations
 
 import threading
+from collections import deque
 from typing import Callable
 
+from .foreground_watcher import ForegroundWatcher
 from .hid_device import (
     DeviceInfo,
     HidReader,
     enumerate_valve_devices,
     pick_input_interface,
+    send_lizard_off_to,
     wake_all_valve_interfaces,
 )
 from .keyboard_hook import ArrowKeyHook
 from .mapper import Mapper
-from .profile import Profile, load_profile, save_profile
+from .profile import Profile, list_profiles, load_profile, save_profile
 from .protocol import ControllerState, ReportParser
+from .rumble import RumbleForwarder
 from .virtual_gamepad import VirtualGamepad, create_gamepad
 
 
 StateCallback = Callable[[ControllerState], None]
 StatusCallback = Callable[[str], None]
+ProfileCallback = Callable[[Profile], None]
 
 
 class BridgeApp:
+    """Owns the long-lived bridge state. UI talks to it through callbacks."""
+
+    KEEPALIVE_INTERVAL = 3.0   # seconds — re-send lizard-off (matches SDL)
+
     def __init__(self) -> None:
         self._reader: HidReader | None = None
         self._parser = ReportParser()
@@ -36,31 +45,37 @@ class BridgeApp:
         self._mapper = Mapper(self._profile, self._gamepad)
         self._state_cbs: list[StateCallback] = []
         self._status_cbs: list[StatusCallback] = []
+        self._profile_cbs: list[ProfileCallback] = []
         self._last_state: ControllerState | None = None
         self._lock = threading.Lock()
-        # Keyboard-arrow → virtual D-pad fallback (for the case where the
-        # Steam Controller reverts to emitting D-pad as keyboard keys).
+
+        # D-pad keyboard fallback (safety net for firmware that drops back
+        # to lizard mode despite our keepalive).
         self._arrow_hook: ArrowKeyHook | None = None
         self._dpad_kbd_enabled: bool = True
-        # Track the current keyboard-driven d-pad state so the gamepad
-        # always sees a consistent up/down/left/right tuple.
         self._kbd_dpad = {"UP": False, "DOWN": False, "LEFT": False, "RIGHT": False}
-        # Counters for diagnostics: total HID frames seen, frames the parser
-        # accepted as input frames, frames it rejected (wrong header etc).
+
+        # Keepalive: SDL's Triton driver re-sends SETTING_LIZARD_MODE=OFF
+        # every ~3 seconds because firmware reverts otherwise. We do the same.
+        self._keepalive_timer: threading.Timer | None = None
+
+        # Frame counters for diagnostics.
         self.frames_total: int = 0
         self.frames_decoded: int = 0
         self.frames_rejected: int = 0
-        # Latest raw frame regardless of whether the parser accepted it —
-        # exposed so the Visualizer can show *something* when decode fails.
         self.last_raw_frame: bytes | None = None
-        # Rolling buffer of the most recent raw frames (for offline analysis
-        # when the report format is unknown). User can press buttons and then
-        # snapshot the buffer via the GUI's "Dump frames" button.
-        from collections import deque
-        self._recent_frames: deque[bytes] = deque(maxlen=120)
-        # First N frames after Start — typically the idle state, useful as
-        # a baseline to diff against button-down captures.
-        self.baseline_frames: list[bytes] = []
+        # Short rolling buffer for the live Visualizer.
+        self._recent_frames: deque[bytes] = deque(maxlen=64)
+
+        # Rumble passthrough — game vibrates virtual pad → we forward to
+        # the real controller.
+        self._rumble = RumbleForwarder()
+        self._gamepad.register_rumble(self._on_rumble)
+
+        # Auto-profile-switch: poll foreground process, load
+        # profiles/<exe>.json when the active window changes.
+        self._foreground: ForegroundWatcher | None = None
+        self._auto_profile_enabled: bool = False
 
     # ---- subscriptions ----
 
@@ -70,10 +85,20 @@ class BridgeApp:
     def on_status(self, cb: StatusCallback) -> None:
         self._status_cbs.append(cb)
 
+    def on_profile_change(self, cb: ProfileCallback) -> None:
+        self._profile_cbs.append(cb)
+
     def _emit_status(self, msg: str) -> None:
         for cb in list(self._status_cbs):
             try:
                 cb(msg)
+            except Exception:
+                pass
+
+    def _emit_profile(self) -> None:
+        for cb in list(self._profile_cbs):
+            try:
+                cb(self._profile)
             except Exception:
                 pass
 
@@ -90,6 +115,10 @@ class BridgeApp:
     @property
     def last_state(self) -> ControllerState | None:
         return self._last_state
+
+    @property
+    def recent_frames(self) -> list[bytes]:
+        return list(self._recent_frames)
 
     def is_running(self) -> bool:
         return self._reader is not None and self._reader.is_running()
@@ -108,35 +137,60 @@ class BridgeApp:
         self.frames_decoded = 0
         self.frames_rejected = 0
         self._recent_frames.clear()
-        self.baseline_frames.clear()
-        # Broadcast the disable-lizard / enable-raw-input commands to every
-        # Valve interface BEFORE opening the data endpoint. The control and
-        # data endpoints are different HID collections on the new Puck.
+        # Broadcast disable-lizard / enable-raw-input to every Valve interface
+        # BEFORE opening the data endpoint. The control and data endpoints are
+        # different HID collections on the new Puck.
         try:
             stats = wake_all_valve_interfaces()
             self._emit_status(
                 f"Wake: opened {stats['opened']} interface(s), "
-                f"sent {stats['commands_sent']} commands, {stats['errors']} errors."
+                f"{stats['commands_sent']} commands sent, {stats['errors']} errors."
             )
         except Exception as e:
             self._emit_status(f"Wake-broadcast failed: {e}")
-        self._emit_status(f"Opening {device.label}...")
+        self._emit_status(f"Opening {device.label}…")
         self._reader = HidReader(
             device,
             on_report=self._on_report,
             on_error=self._on_error,
         )
         self._reader.start()
-        # Start the arrow-key hook so the D-pad works even when the
-        # controller reverts to keyboard-arrow output. The hook also
-        # suppresses the OS keyboard event so it doesn't move window focus.
+        # Make the rumble forwarder aware of every Valve interface (one will
+        # accept haptic reports — we don't know which in advance).
+        self._rumble.set_devices(self.list_devices())
+        # Arrow-key safety net for the D-pad.
         if self._dpad_kbd_enabled:
             self._start_arrow_hook()
+        # 3-second keepalive for SETTING_LIZARD_MODE=OFF.
+        self._start_keepalive()
+        # Foreground process watcher (if enabled).
+        if self._auto_profile_enabled:
+            self._start_foreground_watcher()
         self._emit_status(f"Bridging: {device.label}. {self._gamepad.status}.")
 
+    def stop(self) -> None:
+        if self._reader is not None:
+            self._reader.stop()
+            self._reader = None
+        self._stop_arrow_hook()
+        self._stop_keepalive()
+        self._stop_foreground_watcher()
+        try:
+            self._gamepad.reset()
+        except Exception:
+            pass
+        self._emit_status("Bridge stopped.")
+
+    def shutdown(self) -> None:
+        self.stop()
+        try:
+            self._gamepad.close()
+        except Exception:
+            pass
+
+    # ---- d-pad keyboard fallback ----
+
     def set_dpad_keyboard_capture(self, enabled: bool) -> None:
-        """Toggle the keyboard-arrow → virtual D-pad fallback. When the
-        bridge is already running, takes effect immediately."""
         self._dpad_kbd_enabled = enabled
         if not enabled:
             self._stop_arrow_hook()
@@ -148,11 +202,9 @@ class BridgeApp:
             return
         self._arrow_hook = ArrowKeyHook(on_arrow=self._on_arrow_key, suppress=True)
         if self._arrow_hook.start():
-            self._emit_status(
-                "D-pad fallback: capturing keyboard arrows → virtual D-pad."
-            )
+            self._emit_status("D-pad fallback active: keyboard arrows → virtual D-pad.")
         else:
-            self._emit_status("D-pad fallback: failed to install keyboard hook.")
+            self._emit_status("D-pad fallback: keyboard hook failed to install.")
             self._arrow_hook = None
 
     def _stop_arrow_hook(self) -> None:
@@ -160,7 +212,6 @@ class BridgeApp:
             return
         self._arrow_hook.stop()
         self._arrow_hook = None
-        # Release any pressed d-pad direction on shutdown.
         for k in self._kbd_dpad:
             self._kbd_dpad[k] = False
         try:
@@ -170,7 +221,6 @@ class BridgeApp:
             pass
 
     def _on_arrow_key(self, name: str, pressed: bool) -> None:
-        """Hook callback (runs on the keyboard-hook thread)."""
         if name not in self._kbd_dpad:
             return
         if self._kbd_dpad[name] == pressed:
@@ -187,23 +237,80 @@ class BridgeApp:
         except Exception as e:
             self._emit_status(f"D-pad keyboard forward error: {e}")
 
-    def stop(self) -> None:
-        if self._reader is not None:
-            self._reader.stop()
-            self._reader = None
-        self._stop_arrow_hook()
-        try:
-            self._gamepad.reset()
-        except Exception:
-            pass
-        self._emit_status("Bridge stopped.")
+    # ---- lizard-mode keepalive ----
 
-    def shutdown(self) -> None:
-        self.stop()
+    def _start_keepalive(self) -> None:
+        self._stop_keepalive()
+        self._schedule_keepalive()
+
+    def _schedule_keepalive(self) -> None:
+        if not self.is_running():
+            return
+        self._keepalive_timer = threading.Timer(self.KEEPALIVE_INTERVAL, self._keepalive_tick)
+        self._keepalive_timer.daemon = True
+        self._keepalive_timer.start()
+
+    def _keepalive_tick(self) -> None:
+        if not self.is_running():
+            return
         try:
-            self._gamepad.close()
-        except Exception:
-            pass
+            send_lizard_off_to(enumerate_valve_devices())
+        except Exception as e:
+            self._emit_status(f"Keepalive error: {e}")
+        finally:
+            self._schedule_keepalive()
+
+    def _stop_keepalive(self) -> None:
+        t = self._keepalive_timer
+        if t is not None:
+            try:
+                t.cancel()
+            except Exception:
+                pass
+        self._keepalive_timer = None
+
+    # ---- rumble passthrough ----
+
+    def set_rumble_enabled(self, enabled: bool) -> None:
+        self._rumble.set_enabled(enabled)
+
+    def _on_rumble(self, large_motor: int, small_motor: int) -> None:
+        # Called from vgamepad's notification thread. RumbleForwarder is
+        # internally thread-safe and rate-limited.
+        self._rumble.feed(large_motor, small_motor)
+
+    # ---- foreground watcher / auto profile ----
+
+    def set_auto_profile(self, enabled: bool) -> None:
+        self._auto_profile_enabled = enabled
+        if enabled and self.is_running():
+            self._start_foreground_watcher()
+        elif not enabled:
+            self._stop_foreground_watcher()
+
+    def _start_foreground_watcher(self) -> None:
+        if self._foreground is not None:
+            return
+        self._foreground = ForegroundWatcher(on_change=self._on_foreground_change)
+        self._foreground.start()
+        self._emit_status("Auto profile: watching foreground process.")
+
+    def _stop_foreground_watcher(self) -> None:
+        if self._foreground is None:
+            return
+        self._foreground.stop()
+        self._foreground = None
+
+    def _on_foreground_change(self, exe_name: str | None) -> None:
+        if not exe_name:
+            return
+        # Only switch if a profile with that exact name exists.
+        if exe_name in list_profiles():
+            try:
+                self.load_profile(exe_name)
+                self._emit_status(f"Auto-loaded profile '{exe_name}' for foreground process.")
+            except Exception:
+                pass
 
     # ---- profile handling ----
 
@@ -220,19 +327,14 @@ class BridgeApp:
             self._profile = profile
             self._mapper.set_profile(profile)
         self._emit_status(f"Loaded profile: {profile.name}")
+        self._emit_profile()
 
     # ---- callbacks from HidReader ----
-
-    @property
-    def recent_frames(self) -> list[bytes]:
-        return list(self._recent_frames)
 
     def _on_report(self, data: bytes) -> None:
         self.frames_total += 1
         self.last_raw_frame = data
         self._recent_frames.append(data)
-        if len(self.baseline_frames) < 12:
-            self.baseline_frames.append(data)
         state = self._parser.parse(data)
         if state is None:
             self.frames_rejected += 1

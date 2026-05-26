@@ -1,0 +1,53 @@
+name: Hardware compatibility report
+description: Confirm or refine which buttons work on your controller.
+labels: ["hardware", "compatibility"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Help us verify that SteamPad Bridge works on hardware revisions other
+        than the reference unit. Even "everything works" reports are useful.
+  - type: input
+    id: pid
+    attributes:
+      label: Controller PID
+      placeholder: "0x1304 (Steam Controller Puck), or something else"
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware / batch (if known)
+      placeholder: "e.g. shipped Apr 2026, or unknown"
+  - type: input
+    id: connection
+    attributes:
+      label: Connection
+      placeholder: "Bluetooth / Valve Puck dongle / direct USB"
+  - type: checkboxes
+    id: working
+    attributes:
+      label: Which inputs work as expected?
+      options:
+        - label: A / B / X / Y face buttons
+        - label: L1 / R1 shoulders
+        - label: L2 / R2 analog triggers
+        - label: L2 / R2 digital (full-pull edge)
+        - label: D-pad (all 4 directions)
+        - label: Left stick X/Y full range
+        - label: Right stick X/Y full range
+        - label: Left stick click (L3)
+        - label: Right stick click (R3)
+        - label: L4 / R4 inner-rear paddles
+        - label: L5 / R5 outer-rear paddles
+        - label: STEAM button
+        - label: MENU / VIEW small buttons
+        - label: QUICK_ACCESS button
+        - label: Touchpad click + position
+        - label: Rumble in games
+        - label: Battery percentage in the top bar
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything that doesn't work, or differs
+      placeholder: "e.g. 'My R5 paddle fires bit 7 of byte 0x03 instead of bit 0 — capture attached'"

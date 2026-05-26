@@ -1,10 +1,10 @@
 # SteamPad Bridge
 
-Use the **new Valve Steam Controller** (Nov 2025, PID `0x1304`) on *any* Windows game — including non-Steam games — without launching Steam.
+Use the **new Valve Steam Controller** (Nov 2025, codename **Triton**, PID `0x1304`) on *any* Windows game — including non-Steam games — without launching Steam.
 
-The bridge reads the controller's HID input directly (Bluetooth or the Valve "Puck" 2.4 GHz dongle), then emits a virtual Xbox 360 gamepad through the [ViGEmBus](https://github.com/nefarius/ViGEmBus) kernel driver. Any game that supports an Xbox controller will see it as one.
+The bridge reads the controller's HID input directly (Bluetooth or the Valve "Puck" 2.4 GHz dongle), then emits a virtual Xbox 360 gamepad through the [ViGEmBus](https://github.com/nefarius/ViGEmBus) kernel driver. Any game that accepts an Xbox controller will see it as one.
 
-A PySide6 GUI handles device discovery, live input visualization, per-button remapping, per-game profiles, and the capture/diff tooling used to reverse-engineer the new controller's HID report format.
+PySide6 GUI with per-button remapping, per-game profiles, system-tray operation, rumble passthrough, gyro routing, auto-switching by foreground process, and a one-time setup wizard.
 
 ---
 
@@ -12,35 +12,40 @@ A PySide6 GUI handles device discovery, live input visualization, per-button rem
 
 Valve's Steam Input only intercepts games launched **through Steam**. For everything else — Epic, GOG, Battle.net, standalone launchers, emulators — the controller is invisible unless it presents as a standard XInput device. SteamPad Bridge makes the new Steam Controller present as a standard Xbox 360 pad to the whole OS.
 
+In November 2025 Valve open-sourced the Triton driver in SDL ([`SDL_hidapi_steam_triton.c`](https://github.com/libsdl-org/SDL/blob/main/src/joystick/hidapi/SDL_hidapi_steam_triton.c)). SteamPad Bridge's parser is aligned with that authoritative reference.
+
 ---
 
-## Status
+## What works
 
-The new Steam Controller's HID report format isn't publicly documented. This project reverse-engineered it using a built-in capture/diff tool. As of this release the following are confirmed working:
-
-| Input | Status |
+| Input / feature | Status |
 |---|---|
 | A, B, X, Y face buttons | ✓ |
+| MENU, VIEW, STEAM, QUICK_ACCESS system buttons | ✓ |
 | L1, R1 shoulders | ✓ |
-| L2, R2 analog triggers (0–32767) | ✓ |
-| L2, R2 digital (full-pull edge) | ✓ |
-| L5, R5 rear paddles | ✓ |
-| Left stick (X/Y, full range) | ✓ |
-| Right stick (X/Y, full range) | ✓ |
-| D-pad (via keyboard-arrow intercept fallback) | ✓ |
-| STEAM, MENU, QUICK_ACCESS | ✓ |
-| Rumble / haptics | ✗ not yet |
-| Gyro / accelerometer (output) | ✗ raw frames decoded but not wired to virtual pad yet |
-| Touchpad clicks (if present) | ? |
-
-The new controller does **not** have a separate VIEW/back/minus button — only STEAM and MENU. Stick-click bits aren't yet identified; they may not exist as separate signals on this controller.
+| L2, R2 analog triggers (0–32767) + digital edges | ✓ |
+| L4, R4 inner-rear paddles | ✓ |
+| L5, R5 outer-rear paddles | ✓ |
+| D-pad (HID + Windows keyboard-hook fallback) | ✓ |
+| Left + right sticks (full X/Y range) | ✓ |
+| Left + right stick clicks (L3 / R3) | ✓ |
+| Capacitive stick / pad / grip touch flags | ✓ |
+| Battery percentage (best-effort, firmware-dependent) | ✓ |
+| Rumble passthrough (game → controller) | ✓ |
+| Gyro → right-stick aim (configurable) | ✓ |
+| Auto-switch profile by foreground process name | ✓ |
+| Start with Windows + minimize to tray | ✓ |
+| Headless / CLI mode (`--no-gui`) | ✓ |
+| System-tray icon + close-to-tray | ✓ |
+| First-launch setup wizard | ✓ |
+| LEDs / advanced haptic patterns | not yet |
 
 ---
 
 ## Requirements
 
 - Windows 10 / 11
-- Python **3.10+** (tested with 3.14)
+- Python **3.10+** (only if running from source — the prebuilt `.exe` has its own)
 - [ViGEmBus driver](https://github.com/nefarius/ViGEmBus/releases) — install the latest `ViGEmBus_x.x.x.x_x64.msi`, reboot if it asks
 - A Valve Steam Controller (any model, VID `0x28DE`), paired over Bluetooth or via the Valve wireless dongle
 - **Steam must NOT be running** while the bridge is active — Steam grabs the HID endpoint exclusively
@@ -54,35 +59,27 @@ The new controller does **not** have a separate VIEW/back/minus button — only 
 1. Install the [ViGEmBus driver](https://github.com/nefarius/ViGEmBus/releases) (one-time).
 2. Download `SteamPadBridge.exe` from the [latest release](../../releases/latest).
 3. Drop it in any folder, double-click to run.
+4. Follow the first-launch wizard — it takes ~30 seconds.
 
-That's it — no Python install required. The exe creates a `profiles/` subfolder next to itself on first run to store mappings.
+No Python install required. The exe creates a `profiles/` subfolder next to itself on first run.
 
-### Option B — run from source (for hacking on the code)
+### Option B — run from source
 
 ```powershell
 git clone https://github.com/nomada111-source/steampad-bridge.git
 cd steampad-bridge
-.\setup.bat
-```
-
-`setup.bat` creates a `.venv\` and installs `hidapi`, `vgamepad`, and `PySide6`.
-
-Manual install:
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\activate
-python -m pip install -r requirements.txt
+.\setup.bat       # creates .venv and installs deps
+.\run.bat         # launches the GUI
 ```
 
 ### Option C — build your own .exe
 
 ```powershell
-.\setup.bat        # one-time, sets up .venv
+.\setup.bat
 .\build.bat        # produces dist\SteamPadBridge.exe (~45 MB)
 ```
 
-Uses PyInstaller with the spec file in `SteamPadBridge.spec` (commit-tracked, so the build is reproducible).
+Uses PyInstaller with the spec file in `SteamPadBridge.spec`. Committed for reproducibility.
 
 ---
 
@@ -96,45 +93,31 @@ From source:
 .\run.bat
 ```
 
-Or:
+### CLI options
 
-```powershell
-.\.venv\Scripts\activate
-python -m src
-```
+| Flag | Purpose |
+|---|---|
+| `--minimized` | Start hidden, tray-only. Used by auto-start. |
+| `--no-gui` | Headless mode — bridge runs until Ctrl-C. |
+| `--profile NAME` | Load a specific profile on startup. |
+| `--device-index N` | Pre-pick an interface by index. |
 
-The GUI opens with three tabs:
-
-- **Device** — pick HID interface (auto-detected after first successful scan), Start/Stop bridge, save/load profiles, run captures.
-- **Mapping** — per-button remapping, stick deadzone/saturation/sensitivity, trigger thresholds, gyro tuning.
-- **Visualizer** — live stick/pad dots, trigger bars, button grid lights, raw HID hex dump.
-
-### Typical first-run flow
-
-1. Exit Steam (system tray → right-click → Exit).
-2. Pair the controller (Bluetooth) or plug in the Puck dongle.
-3. `.\run.bat`.
-4. On the **Device** tab, click **Start Bridge**. If no interface is remembered yet, the GUI will automatically scan the controller's 9 HID collections to find the one that streams gamepad input and persist the choice.
-5. Check the green **Frames** counter — it should rise as you press buttons.
-6. Launch any game. It will see an Xbox 360 controller.
+Example: `python -m src --no-gui --profile cyberpunk`
 
 ---
 
-## Helper scripts
+## Per-game profiles
 
-```powershell
-# Confirm the ViGEmBus side works without needing the controller.
-# Watch joy.cpl ("Game Controllers") to see the virtual pad wiggle.
-python -m src.selftest
+Save your mapping with a name that matches a game's executable (without `.exe`):
 
-# Probe every HID interface the controller exposes and report which one
-# streams gamepad input. Wiggle a stick / press buttons while it runs.
-python -m src.probe --verbose
-
-# Parser + mapper unit tests (40+ checks, including assertions against real
-# captured frames from the new Steam Controller).
-python -m tests.smoke_test
 ```
+profiles/
+  default.json
+  cyberpunk2077.json
+  hades.json
+```
+
+In the **Settings** tab, enable **Auto-switch profile by foreground game**. When you Alt-Tab into a game, the bridge auto-loads the matching profile. Alt-Tab out — back to default.
 
 ---
 
@@ -142,56 +125,48 @@ python -m tests.smoke_test
 
 ```
 src/
-  __main__.py          entry point — launches the Qt GUI
-  app.py               BridgeApp coordinator (no Qt deps, callable from CLI too)
-  hid_device.py        Valve HID discovery + background read loop + wake commands
-  protocol.py          input report parsers (Steam Deck legacy + new Puck PID 0x1304)
-  virtual_gamepad.py   ViGEmBus / vgamepad wrapper with a Null fallback
-  mapper.py            ControllerState → virtual pad per profile
-  profile.py           JSON profile load/save
-  keyboard_hook.py     Windows low-level keyboard hook for D-pad fallback
-  settings.py          per-machine kv store (remembers the working HID interface)
-  probe.py             CLI: scan HID interfaces to find the streaming one
-  selftest.py          CLI: drive a fake controller pattern through ViGEmBus
+  __main__.py           entry point — argparse + GUI or headless launch
+  app.py                BridgeApp coordinator (no Qt deps, callable from CLI)
+  hid_device.py         Valve HID discovery, wake commands (SETTING_LIZARD_MODE=OFF), keepalive helper
+  protocol.py           Triton input report parser (54-byte, ID 0x42) + legacy Steam Deck parser
+  virtual_gamepad.py    ViGEmBus / vgamepad wrapper + rumble notification
+  mapper.py             ControllerState → virtual pad per profile (sticks, triggers, gyro, dpad)
+  profile.py            JSON profile load/save with new Triton button names
+  keyboard_hook.py      Windows arrow-key intercept for D-pad fallback
+  rumble.py             Forward XInput vibration to the controller via haptic feature reports
+  foreground_watcher.py Poll the foreground process for auto-profile switching
+  autostart.py          Toggle HKCU Run key entry (start with Windows)
+  settings.py           Per-machine kv store
+  probe.py              CLI: scan HID interfaces for the streaming one
+  selftest.py           CLI: drive a fake controller pattern through ViGEmBus
   gui/
-    main_window.py
-    device_panel.py    device picker, start/stop, status, capture tools
-    mapping_editor.py  per-button remap + tuning
-    visualizer.py      live input view with raw hex dump
+    main_window.py      Tray-aware main window, three tabs, close-to-tray
+    bridge_bar.py       Top toolbar: device + Start/Stop + profile + battery + status
+    mapping_editor.py   Per-button remap + stick/trigger/gyro tuning
+    visualizer.py       Live sticks/buttons/triggers/IMU display
+    settings_panel.py   Auto-start, auto-profile, rumble, D-pad fallback toggles
+    first_run.py        First-launch wizard
 profiles/
   default.json
 docs/
-  protocol.md          HID report format notes (Deck-style + new Puck format)
+  protocol.md           HID report format reference (SDL-aligned)
 tests/
-  smoke_test.py
+  smoke_test.py         50+ parser/mapper unit checks
 ```
 
 ---
 
-## How the new controller was decoded
+## D-pad keepalive + keyboard fallback
 
-The new Steam Controller doesn't share the Steam Deck's input report format. It uses a 54-byte frame with report id `0x42`. Mapping out which byte/bit was which button was done with the built-in capture tool:
+The Triton firmware emits the D-pad as keyboard arrow keys unless told otherwise. SDL's reference driver sends a `SET_SETTINGS_VALUES(SETTING_LIZARD_MODE=OFF)` feature report on open and re-sends it every ~3 seconds because the firmware reverts otherwise. SteamPad Bridge does the same.
 
-1. Bridge starts → first 12 frames captured as **idle baseline**.
-2. User types a label (e.g. `A`), holds the corresponding button on the controller, clicks **Capture now**.
-3. The tool snapshots the rolling buffer (most recent ~30 frames) and diffs each byte against the baseline.
-4. Cleanly-disjoint bytes are flagged `BUTTON?`; a bit-level analysis identifies the specific bit that changed.
+As a safety net, the bridge also installs a Windows low-level keyboard hook (`SetWindowsHookExW` / `WH_KEYBOARD_LL`) that:
 
-For buttons that emit keyboard events (like the D-pad, which Windows reads as arrow keys), the **Capture in 3s** countdown mode bypasses the focus-theft problem — you hold the button on the controller and the snapshot fires automatically.
-
-All findings, with confidence levels and unresolved questions, are documented in [`docs/protocol.md`](docs/protocol.md) and as comments above `PUCK_BUTTON_BITS` in [`src/protocol.py`](src/protocol.py).
-
----
-
-## D-pad keyboard fallback
-
-The new Steam Controller usually emits the D-pad as keyboard arrow keys regardless of whether the HID lizard-mode is disabled. When **Capture D-pad from keyboard arrows** is checked in the Device tab (default on), the bridge installs a Windows low-level keyboard hook (`SetWindowsHookExW`) that:
-
-1. Intercepts arrow-key presses.
+1. Intercepts arrow-key presses while bridging.
 2. Forwards them to the virtual Xbox D-pad.
 3. **Suppresses** the OS keyboard event so it can't move window focus or escape into other apps.
 
-The hook only runs while the bridge is active. Uncheck the option if you need arrow keys for other apps while bridging.
+Toggle it on the **Settings** tab if you need keyboard arrows for other apps while the bridge runs.
 
 ---
 
@@ -199,27 +174,29 @@ The hook only runs while the bridge is active. Uncheck the option if you need ar
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| "No Valve HID devices found" | Controller not paired or dongle unplugged | Re-pair BT / replug dongle, hit **Refresh** |
-| Frames counter stays at 0 | Wrong HID interface picked | Click **Scan interfaces** while pressing buttons; it auto-selects and remembers |
-| Frames counter rising but 0 decoded | Wrong report format for this controller | Use **Capture now** / paste me your captures via an Issue; the parser is data-driven |
-| Pressing A closes Windows / types letters | Controller is in "lizard mode" (keyboard emulation) | Click **Wake / Disable Lizard**, then try again |
-| Bridge says "ViGEmBus unavailable" | Driver not installed | Install ViGEmBus, reboot |
-| Steam-related errors | Steam is running and has the HID endpoint exclusive | Right-click Steam tray icon → Exit |
-| D-pad moves window focus | Keyboard hook not enabled or failed to install | Check **Capture D-pad from keyboard arrows**; may require admin |
+| "No Valve HID devices found" | Controller not paired or dongle unplugged | Re-pair BT / replug dongle, click the ↻ button |
+| Status stays "no HID frames yet" | Wrong HID interface picked | Click **Scan** while wiggling a stick — it auto-selects and remembers |
+| Games see no input | ViGEmBus not installed | Install ViGEmBus, reboot |
+| Pressing A closes Windows / types letters | Controller is in lizard mode | The keepalive should fix it within 3 s. If not, restart the bridge — and confirm Steam isn't running |
+| D-pad presses move window focus | Keyboard hook disabled, lizard keepalive failing | Re-enable D-pad keyboard capture in Settings |
+| Rumble doesn't trigger | Controller-side rumble format may differ on your firmware | File a hardware compat issue with your PID + firmware info |
+
+---
+
+## Related projects
+
+- **[ViGEmBus](https://github.com/nefarius/ViGEmBus)** — the kernel driver this whole thing depends on
+- **[SDL](https://github.com/libsdl-org/SDL)** — Valve's open-source Triton driver lives here
+- **[HID Remapper](https://github.com/jfedor2/hid-remapper)** — alternative, hardware-based approach (a USB dongle that remaps)
+- **[python-steamcontroller](https://github.com/ynsta/steamcontroller)** — for the original 2015 Steam Controller
 
 ---
 
 ## Contributing
 
-Patches welcome. Particularly useful:
+PRs welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md). The protocol map is data-driven (one dict in `src/protocol.py`), so adding support for hardware revisions or fixing odd quirks is usually a few lines.
 
-- **Confirm or refine the button/bit map** on your hardware. Use the capture tool and paste the output in an issue.
-- **Identify stick-click bits**, if they exist on your controller — none were found on the reference hardware.
-- **Rumble / haptics output reports** — the Steam Deck protocol uses output report ID 0x8F with a per-side amplitude payload; the new controller likely uses similar but unverified.
-- **Gyro / accelerometer**: raw IMU bytes are in the report (around offsets 0x0c–0x1f mixed with stick data — see notes in `docs/protocol.md`), but not yet decoded or routed to the virtual gamepad.
-- **Auto-profile-switch** by foreground process name.
-
-Run `python -m tests.smoke_test` before opening a PR — there are real captured frames in the test fixtures that the parser must keep decoding correctly.
+Hardware-compatibility reports are especially valuable — file one through the [issue template](.github/ISSUE_TEMPLATE/hardware_compatibility.yml) if your controller behaves differently from the reference.
 
 ---
 

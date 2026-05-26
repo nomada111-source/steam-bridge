@@ -5,6 +5,59 @@ All notable changes to SteamPad Bridge.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project tries to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — SDL-aligned protocol + UI overhaul
+
+### Big news
+
+Valve open-sourced the new Steam Controller's driver into SDL in November
+2025 (codename **Triton**). The bridge is now aligned with SDL's
+authoritative bit map and command set, which fixes several long-standing
+issues.
+
+### Added
+
+- **SDL-aligned button map.** All 30 Triton buttons in `PUCK_BUTTON_BITS`,
+  including all four D-pad directions in their actual HID positions, real
+  MENU and VIEW, real L3/R3 stick clicks, L4/R4 inner-rear paddles, all
+  capacitive touch flags (stick, pad, grip).
+- **Lizard-mode keepalive.** Re-sends `SET_SETTINGS_VALUES(LIZARD_MODE=OFF)`
+  every 3 seconds while bridging — matches SDL's reference driver. The
+  D-pad now reliably emits via HID instead of leaking as arrow keys.
+- **Rumble passthrough.** When a game vibrates the virtual Xbox pad, the
+  bridge forwards it to the controller via haptic feature reports.
+- **Auto-switch profile** by foreground process name. Save
+  `profiles/<exe>.json`, enable in Settings, the profile loads when you
+  Alt-Tab into the game.
+- **System-tray icon** + minimize-to-tray on close.
+- **Start with Windows** option (HKCU Run key, no admin needed). Launches
+  minimized to tray.
+- **First-launch wizard** that walks new users through ViGEmBus, pairing,
+  and interface scan.
+- **Headless / CLI mode**: `python -m src --no-gui [--profile NAME]` for
+  power users.
+- **Battery percentage** indicator in the top bar (firmware-dependent).
+- **Gyro → right-stick aim** is now wired through (was already in the
+  profile schema; the parser now populates the IMU bytes).
+- **Cleaner GUI**: bridge bar at the top with device + Start/Stop +
+  profile + battery + status; three tabs (Mapping / Visualizer /
+  Settings). Removed the reverse-engineering capture/diff tooling — no
+  longer needed.
+
+### Changed
+
+- The Windows arrow-key keyboard hook is now a *safety net* rather than
+  the primary D-pad path — the keepalive normally keeps HID D-pad alive
+  on its own.
+- `byte 0x02 bit 6` was relabeled VIEW (per SDL). Existing profiles using
+  the old "MENU" label still work because the mapper translates flags by
+  semantic name.
+
+### Removed
+
+- Capture-now / Capture-in-3s / Dump-frames / Wake-button UI controls.
+  The protocol is fully mapped now; these tools served their purpose.
+- Old `device_panel.py`. Replaced by the smaller `bridge_bar.py`.
+
 ## [0.1.0] — Initial public release
 
 ### Added

@@ -79,6 +79,16 @@ class Btn(IntFlag):
     RIGHT_STICK_CLICK = 1 << 26
     QUICK_ACCESS = 1 << 27  # Steam Deck "..." button; reused as second Steam btn
 
+    # New Steam Controller (Triton, PID 0x1304) extras — these don't exist on
+    # the original 2015 Steam Controller. Picked bits beyond the legacy range
+    # so we never alias an existing flag.
+    L4 = 1 << 32             # inner-rear paddle left  (SDL TRITON_HBUTTON_L4)
+    R4 = 1 << 33             # inner-rear paddle right (SDL TRITON_HBUTTON_R4)
+    LEFT_STICK_TOUCH = 1 << 34   # capacitive touch on the left stick top
+    RIGHT_STICK_TOUCH = 1 << 35  # capacitive touch on the right stick top
+    LEFT_GRIP_TOUCH = 1 << 36    # capacitive touch on the left grip
+    RIGHT_GRIP_TOUCH = 1 << 37   # capacitive touch on the right grip
+
 
 @dataclass
 class ControllerState:
@@ -91,10 +101,14 @@ class ControllerState:
     right_stick: tuple[float, float] = (0.0, 0.0)
     left_pad: tuple[float, float] = (0.0, 0.0)
     right_pad: tuple[float, float] = (0.0, 0.0)
+    left_pad_pressure: float = 0.0
+    right_pad_pressure: float = 0.0
     left_trigger: float = 0.0
     right_trigger: float = 0.0
     accel: tuple[float, float, float] = (0.0, 0.0, 0.0)
     gyro: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    # Battery percent, 0..100. -1 means "unknown / not decoded".
+    battery_percent: int = -1
     raw: bytes = field(default_factory=bytes, repr=False)
 
     def pressed(self, button: Btn) -> bool:
@@ -163,28 +177,53 @@ PUCK_FRAME_LEN = 54
 class PuckLayout:
     """Layout for the new Steam Controller Puck input report (PID 0x1304).
 
-    Confirmed empirically against captured frames. Offsets are relative
-    to the start of the 54-byte frame (byte 0 is the 0x42 report id).
+    Aligned with Valve's open-source SDL Triton driver
+    (`SDL_hidapi_steam_triton.c`) plus held-frame captures.
+    Offsets are relative to the start of the 54-byte frame (byte 0 is the
+    0x42 report id).
     """
     report_id_offset: int = 0
     seq_offset: int = 1                # u8 counter
 
-    # Digital buttons occupy bytes 0x02..0x05 (and some bits leak into
-    # higher bytes). Parsed via PUCK_BUTTON_BITS below rather than
-    # offset-based, because bits aren't contiguous.
+    # Digital buttons occupy bytes 0x02..0x05. Parsed via PUCK_BUTTON_BITS.
 
     # Analog triggers: i16 little-endian, 0..32767. Confirmed via captures:
     # L2 squeeze fills 0x06..0x07 with 0x7fff; R2 squeeze fills 0x08..0x09.
     left_trigger_offset: int = 0x06
     right_trigger_offset: int = 0x08
 
-    # Analog sticks: i16 little-endian, -32768..32767. Confirmed via captures
-    # LX_RIGHT (0x0a..0x0b = 0x7fff), LY_UP (0x0c..0x0d = 0x7fff),
-    # RX_RIGHT (0x0e..0x0f = 0x7fff), RX_UP (0x10..0x11 = 0x7fff).
+    # Analog sticks: i16 little-endian. Confirmed via stick captures.
     left_stick_x: int = 0x0a
     left_stick_y: int = 0x0c
     right_stick_x: int = 0x0e
     right_stick_y: int = 0x10
+
+    # IMU (accelerometer + gyroscope): each axis i16 LE. SDL's
+    # `TritonMTUIMU_t` structure follows the sticks. Best-effort offsets
+    # — verifiable in the live Visualizer (the values change continuously
+    # as you tilt the controller, distinguishable from sticks which sit
+    # at zero at rest).
+    accel_x: int = 0x12
+    accel_y: int = 0x14
+    accel_z: int = 0x16
+    gyro_x: int = 0x18
+    gyro_y: int = 0x1a
+    gyro_z: int = 0x1c
+
+    # Touchpad position + pressure (i16 LE / u16 LE). Touchpad position is
+    # only meaningful when LEFT_PAD_TOUCH / RIGHT_PAD_TOUCH is set.
+    left_pad_x: int = 0x1e
+    left_pad_y: int = 0x20
+    left_pad_pressure: int = 0x22
+    right_pad_x: int = 0x24
+    right_pad_y: int = 0x26
+    right_pad_pressure: int = 0x28
+
+    # Battery: single u8 in the trailing block, 0..100 percent. The exact
+    # byte position is firmware-revision-dependent; we scan a small window
+    # at the end of the frame for a plausible 0..100 value (see parser).
+    battery_search_start: int = 0x30
+    battery_search_end: int = 0x36
 
 
 PUCK_LAYOUT = PuckLayout()
@@ -318,82 +357,144 @@ class ReportParser:
             if byte_off < len(data) and data[byte_off] & (1 << bit):
                 buttons |= int(btn)
 
-        def _maybe_axis(off: int) -> float:
+        def axis(off: int) -> float:
             return _norm_axis(_i16(data, off)) if off >= 0 else 0.0
+
+        def u16_pressure(off: int) -> float:
+            if off + 2 > len(data):
+                return 0.0
+            v = struct.unpack_from("<H", data, off)[0]
+            return v / 65535.0
+
+        # Best-effort battery scan: look for the first byte in the trailing
+        # range that's a plausible 0..100 value. Firmware tends to put
+        # battery percent here directly. -1 = unknown.
+        battery = -1
+        for off in range(L.battery_search_start, min(L.battery_search_end, len(data))):
+            b = data[off]
+            if 0 <= b <= 100:
+                battery = b
+                break
 
         return ControllerState(
             seq=data[L.seq_offset] if L.seq_offset < len(data) else 0,
             buttons=buttons,
-            left_stick=(_maybe_axis(L.left_stick_x), _maybe_axis(L.left_stick_y)),
-            right_stick=(_maybe_axis(L.right_stick_x), _maybe_axis(L.right_stick_y)),
+            left_stick=(axis(L.left_stick_x), axis(L.left_stick_y)),
+            right_stick=(axis(L.right_stick_x), axis(L.right_stick_y)),
+            left_pad=(axis(L.left_pad_x), axis(L.left_pad_y)),
+            right_pad=(axis(L.right_pad_x), axis(L.right_pad_y)),
+            left_pad_pressure=u16_pressure(L.left_pad_pressure),
+            right_pad_pressure=u16_pressure(L.right_pad_pressure),
             left_trigger=_norm_trigger(_i16(data, L.left_trigger_offset)),
             right_trigger=_norm_trigger(_i16(data, L.right_trigger_offset)),
+            accel=(axis(L.accel_x), axis(L.accel_y), axis(L.accel_z)),
+            gyro=(axis(L.gyro_x), axis(L.gyro_y), axis(L.gyro_z)),
+            battery_percent=battery,
             raw=data,
         )
 
 
 # Mapping of (byte_offset, bit_index) → Btn flag for the new Steam Controller
-# (PID 0x1304) Puck input report. Filled in incrementally from capture sessions
-# via the GUI's "Capture now" diff tool.
+# (codename Triton, PID 0x1304). This map is now grounded in Valve's
+# open-source SDL driver (`SDL_hidapi_steam_triton.c`), cross-checked against
+# the project's own held-button captures.
 #
-# Confirmed via direct capture (one button held at a time, held-frame inspection):
+# In SDL the button field is a 32-bit `ulButtons` little-endian, where bit N
+# corresponds to byte (N // 8) + buttons_offset, bit (N % 8). Translating:
 #
-#   byte 0x02 — primary face buttons (XInput-style, low nibble = ABXY)
-#     bit 0 = A             (capture_a)
-#     bit 1 = B             (inferred from XInput convention; not yet captured solo)
-#     bit 2 = X             (capture_x)
-#     bit 3 = Y             (capture_y)
-#     bit 4 = QUICK_ACCESS  (Deck-style "..." second system button — capture_quick_access)
-#     bit 6 = MENU          (start / plus — capture_menu)
-#   (the new pad has no separate VIEW/back/minus button — only STEAM and MENU)
+#   byte 0x02 (SDL bits 0..7)
+#     bit 0 = A                    TRITON_LBUTTON_A          (capture_a)
+#     bit 1 = B                    TRITON_LBUTTON_B
+#     bit 2 = X                    TRITON_LBUTTON_X          (capture_x)
+#     bit 3 = Y                    TRITON_LBUTTON_Y          (capture_y)
+#     bit 4 = QUICK_ACCESS         TRITON_HBUTTON_QAM        (capture_quick_access)
+#     bit 5 = RIGHT_STICK_CLICK    TRITON_LBUTTON_R3
+#     bit 6 = VIEW                 TRITON_LBUTTON_VIEW       (the "minus/back" small btn —
+#                                                              user reported the controller
+#                                                              has no such button, but SDL
+#                                                              wires it here. May map to a
+#                                                              different physical key on
+#                                                              this revision.)
+#     bit 7 = R4                   TRITON_HBUTTON_R4 (inner-rear right paddle)
 #
-#   byte 0x03 — right-side digital buttons & part of the D-pad
-#     bit 0 = R5 (rear right paddle)   (capture_r5)
-#     bit 1 = R1 (right shoulder)      (capture_r1)
-#     bit 3 = DPAD_RIGHT               (capture_dpad_right)
+#   byte 0x03 (SDL bits 8..15) — RIGHT side, D-pad
+#     bit 0 = R5                   TRITON_LBUTTON_R5         (capture_r5)
+#     bit 1 = R1                   TRITON_LBUTTON_R          (capture_r1)
+#     bit 2 = DPAD_DOWN            TRITON_LBUTTON_DPAD_DOWN  ← HID-mode only
+#     bit 3 = DPAD_RIGHT           TRITON_LBUTTON_DPAD_RIGHT (capture_dpad_right)
+#     bit 4 = DPAD_LEFT            TRITON_LBUTTON_DPAD_LEFT  ← HID-mode only
+#     bit 5 = DPAD_UP              TRITON_LBUTTON_DPAD_UP    ← HID-mode only
+#     bit 6 = MENU                 TRITON_LBUTTON_MENU       (the "plus/start" small btn —
+#                                                              what the user previously
+#                                                              labeled MENU was actually
+#                                                              VIEW at byte 0x02 bit 6.)
+#     bit 7 = LEFT_STICK_CLICK     TRITON_LBUTTON_L3
 #
-#   byte 0x04 — left-side digital & system buttons
-#     bit 0 = STEAM                     (capture_steam, transient — tentative)
-#     bit 2 = L5 (rear left paddle)     (capture_l5)
-#     bit 3 = L1 (left shoulder)        (capture_l1)
-#     bit 4 = right-stick activity      (fires for BOTH RSCLICK and any stick
-#                                        push — see captures rsclick, rx_right,
-#                                        rx_up — so this is "stick touched"
-#                                        not a clean click. NOT MAPPED to
-#                                        RIGHT_STICK_CLICK to avoid false
-#                                        positives during normal stick use.)
-#     bit 7 = R2 digital (full pull)    (capture_r2 — distinct from R2 analog
-#                                        at byte 0x08..0x09)
+#   byte 0x04 (SDL bits 16..23) — LEFT side, touchpad/trigger flags
+#     bit 0 = STEAM                TRITON_LBUTTON_STEAM      (capture_steam, transient)
+#     bit 1 = L4                   TRITON_HBUTTON_L4 (inner-rear left paddle)
+#     bit 2 = L5                   TRITON_LBUTTON_L5         (capture_l5)
+#     bit 3 = L1                   TRITON_LBUTTON_L          (capture_l1)
+#     bit 4 = RIGHT_STICK_TOUCH    TRITON_RIGHT_JOYSTICK_TOUCH
+#     bit 5 = RIGHT_PAD_TOUCH      TRITON_RIGHT_TOUCHPAD_TOUCH
+#     bit 6 = RIGHT_PAD_CLICK      TRITON_RIGHT_TOUCHPAD_CLICK
+#     bit 7 = R2 digital           TRITON_RIGHT_TRIGGER_CLICK (capture_r2)
 #
-#   byte 0x05
-#     bit 0 = left-stick activity       (fires for any LX/LY/click — see
-#                                        captures lsclick, lx_right, ly_up.
-#                                        Same touched-indicator pattern as
-#                                        byte 0x04 bit 4 on the right side.)
-#     bit 3 = L2 digital (full pull)   (capture_l2 — distinct from L2 analog
-#                                        at byte 0x06..0x07)
-#     bit 4..5 appear to be "any-right-side" / "any-left-side" activity
-#       indicators; they fire alongside multiple buttons. Not mapped.
+#   byte 0x05 (SDL bits 24..31) — leftover touchpad/trigger/grip flags
+#     bit 0 = LEFT_STICK_TOUCH     TRITON_LEFT_JOYSTICK_TOUCH
+#     bit 1 = LEFT_PAD_TOUCH       TRITON_LEFT_TOUCHPAD_TOUCH
+#     bit 2 = LEFT_PAD_CLICK       TRITON_LEFT_TOUCHPAD_CLICK
+#     bit 3 = L2 digital           TRITON_LEFT_TRIGGER_CLICK (capture_l2)
+#     bit 4 = RIGHT_GRIP_TOUCH     TRITON_RIGHT_GRIP_TOUCH
+#     bit 5 = LEFT_GRIP_TOUCH      TRITON_LEFT_GRIP_TOUCH
 #
-# Still TBD (need clean captures, d-pad requires delayed-capture mode because
-# d-pad keys leak as keyboard arrow events that move window focus):
-#   LEFT_STICK_CLICK / RIGHT_STICK_CLICK — distinct from the touch indicators
-#       above; may not exist as separate bits on the new pad.
-#   DPAD_UP / DOWN / LEFT
-#   VIEW (back / minus), QUICK_ACCESS
+# Notes:
+# - The D-pad bits in byte 0x03 only stream when the controller is in raw
+#   HID gamepad mode (lizard mode off). We re-send the SET_SETTINGS_VALUES
+#   (SETTING_LIZARD_MODE=OFF) command every 3 seconds from BridgeApp to keep
+#   them flowing — see hid_device.send_lizard_off_to and app.BridgeApp's
+#   keepalive timer. A keyboard-hook fallback (keyboard_hook.py) handles the
+#   case where lizard mode stubbornly stays on.
+# - byte 0x02 bit 6 (VIEW) and byte 0x03 bit 6 (MENU) are *both* defined by
+#   SDL, but the physical layout on this controller revision exposes only
+#   one such button between the sticks. Our default profile maps the one the
+#   user can reach to Xbox START — either label works in practice.
 PUCK_BUTTON_BITS: dict[tuple[int, int], Btn] = {
+    # byte 0x02 — face buttons + low-bit specials
     (0x02, 0): Btn.A,
     (0x02, 1): Btn.B,
     (0x02, 2): Btn.X,
     (0x02, 3): Btn.Y,
     (0x02, 4): Btn.QUICK_ACCESS,
-    (0x02, 6): Btn.MENU,
+    (0x02, 5): Btn.RIGHT_STICK_CLICK,
+    (0x02, 6): Btn.VIEW,
+    (0x02, 7): Btn.R4,
+
+    # byte 0x03 — right side + D-pad + system
     (0x03, 0): Btn.R5,
     (0x03, 1): Btn.R1,
+    (0x03, 2): Btn.DPAD_DOWN,
     (0x03, 3): Btn.DPAD_RIGHT,
+    (0x03, 4): Btn.DPAD_LEFT,
+    (0x03, 5): Btn.DPAD_UP,
+    (0x03, 6): Btn.MENU,
+    (0x03, 7): Btn.LEFT_STICK_CLICK,
+
+    # byte 0x04 — STEAM + left paddles + right touchpad + R2 digital
     (0x04, 0): Btn.STEAM,
+    (0x04, 1): Btn.L4,
     (0x04, 2): Btn.L5,
     (0x04, 3): Btn.L1,
+    (0x04, 4): Btn.RIGHT_STICK_TOUCH,
+    (0x04, 5): Btn.RIGHT_PAD_TOUCH,
+    (0x04, 6): Btn.RIGHT_PAD_CLICK,
     (0x04, 7): Btn.R2,
+
+    # byte 0x05 — left touchpad + L2 digital + grip touches
+    (0x05, 0): Btn.LEFT_STICK_TOUCH,
+    (0x05, 1): Btn.LEFT_PAD_TOUCH,
+    (0x05, 2): Btn.LEFT_PAD_CLICK,
     (0x05, 3): Btn.L2,
+    (0x05, 4): Btn.RIGHT_GRIP_TOUCH,
+    (0x05, 5): Btn.LEFT_GRIP_TOUCH,
 }

@@ -1,0 +1,53 @@
+name: Bug report
+description: Something isn't working as expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please include enough info to reproduce it.
+  - type: input
+    id: version
+    attributes:
+      label: SteamPad Bridge version
+      placeholder: "e.g. 0.2.0 (the version shown in the GitHub release you downloaded)"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Windows version
+      placeholder: "e.g. Windows 11 23H2 x64"
+    validations:
+      required: true
+  - type: input
+    id: pid
+    attributes:
+      label: Controller PID (visible in the Controller dropdown)
+      placeholder: "e.g. 0x1304"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start the bridge
+        2. Press button X
+        3. Game shows Y instead of expected Z
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Status log
+      description: Right-click the status line at the top to copy, or paste the most relevant entries.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Sanity checks
+      options:
+        - label: I quit Steam fully (system tray → Exit) before testing
+        - label: I installed the ViGEmBus driver
+        - label: I tested with the latest release (not an old build)

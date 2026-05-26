@@ -118,6 +118,46 @@ def pick_input_interface(devices: Iterable[DeviceInfo]) -> DeviceInfo | None:
     return max(devs, key=score)
 
 
+# Valve HID command IDs (verified against SDL's open-source Triton driver,
+# src/joystick/hidapi/steam/controller_constants.h):
+#   0x81  ID_CLEAR_DIGITAL_MAPPINGS     — wipe keyboard/mouse bindings
+#   0x85  ID_SET_DEFAULT_DIGITAL_MAPPINGS — restore them
+#   0x87  ID_SET_SETTINGS_VALUES        — change a controller setting
+#   0x8E  ID_LOAD_DEFAULT_SETTINGS      — reset settings to firmware defaults
+#
+# SETTING_LIZARD_MODE = 9 in the ControllerSettings enum. Sending a
+# SET_SETTINGS_VALUES request with (setting=9, value=0) drops the
+# controller out of lizard mode (keyboard/mouse emulation) and into raw
+# HID gamepad streaming — including the D-pad bits, which otherwise only
+# fire as keyboard arrow keys.
+SETTING_LIZARD_MODE = 9
+LIZARD_MODE_OFF = 0
+
+
+def _settings_command(*pairs: tuple[int, int]) -> bytes:
+    """Build a feature-report payload for ID_SET_SETTINGS_VALUES (0x87).
+
+    Wire format:
+        report_id (0x00)
+        ID_SET_SETTINGS_VALUES (0x87)
+        length-in-bytes (= count * 3)
+        for each setting:
+            setting_num (u8)
+            setting_value_lo (u8)
+            setting_value_hi (u8)
+        ... zero-padded to feature-report size (64 bytes).
+    """
+    body = [0x87, len(pairs) * 3]
+    for setting, value in pairs:
+        body += [setting & 0xFF, value & 0xFF, (value >> 8) & 0xFF]
+    buf = [0x00] + body
+    return bytes(buf + [0x00] * (65 - len(buf)))
+
+
+def _disable_lizard_payload() -> bytes:
+    return _settings_command((SETTING_LIZARD_MODE, LIZARD_MODE_OFF))
+
+
 def wake_all_valve_interfaces(devices: Iterable[DeviceInfo] | None = None) -> dict[str, int]:
     """Broadcast the disable-lizard / enable-raw-input commands to every
     Valve HID interface on the system.
@@ -139,15 +179,14 @@ def wake_all_valve_interfaces(devices: Iterable[DeviceInfo] | None = None) -> di
         buf = [0x00] + cmd
         return bytes(buf + [0x00] * (65 - len(buf)))
 
-    commands = (
-        [0x81],                          # CLEAR_DIGITAL_MAPPINGS (disable lizard)
-        [0x87, 0x03, 0x08, 0x07, 0x00],  # SET_SETTINGS: enable raw input
-        [0x87, 0x03, 0x32, 0x00, 0x00],  # SET_SETTINGS: disable idle timeout
-        [0x85],                          # DEFAULT_MOUSE (no-op if already off)
-        [0x8E],                          # LOAD_DEFAULT_SETTINGS — some fw need this
+    # Legacy single-byte commands (still useful for the original Steam
+    # Controller and as a hint to older firmware revisions).
+    legacy_commands = (
+        [0x81],                          # CLEAR_DIGITAL_MAPPINGS
     )
 
     stats = {"opened": 0, "commands_sent": 0, "errors": 0}
+    lizard_payload = _disable_lizard_payload()
     for info in devices:
         dev = hid.device()
         try:
@@ -157,25 +196,56 @@ def wake_all_valve_interfaces(devices: Iterable[DeviceInfo] | None = None) -> di
             stats["errors"] += 1
             continue
         try:
-            for cmd in commands:
+            for cmd in legacy_commands:
                 try:
                     dev.send_feature_report(pad64(cmd))
                     stats["commands_sent"] += 1
                 except Exception:
                     pass
-                # Also try as an output report — some collections refuse
-                # feature reports but accept the same payload as output.
-                try:
-                    dev.write(pad64(cmd))
-                    stats["commands_sent"] += 1
-                except Exception:
-                    pass
+            # Modern lizard-off via SETTING_LIZARD_MODE — the only command
+            # SDL's Triton driver uses, and the one the new Steam Controller
+            # actually responds to.
+            try:
+                dev.send_feature_report(lizard_payload)
+                stats["commands_sent"] += 1
+            except Exception:
+                pass
         finally:
             try:
                 dev.close()
             except Exception:
                 pass
     return stats
+
+
+def send_lizard_off_to(devices: Iterable[DeviceInfo]) -> int:
+    """Send the SET_SETTINGS_VALUES(LIZARD_MODE_OFF) feature report to every
+    interface in `devices`. Returns the number of interfaces the command
+    was accepted on.
+
+    BridgeApp's keepalive timer calls this every ~3 seconds because SDL's
+    Triton reference driver does the same — firmware otherwise reverts to
+    lizard mode after a brief idle.
+    """
+    payload = _disable_lizard_payload()
+    accepted = 0
+    for info in devices:
+        dev = hid.device()
+        try:
+            dev.open_path(info.path)
+        except Exception:
+            continue
+        try:
+            dev.send_feature_report(payload)
+            accepted += 1
+        except Exception:
+            pass
+        finally:
+            try:
+                dev.close()
+            except Exception:
+                pass
+    return accepted
 
 
 class HidReader:

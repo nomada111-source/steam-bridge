@@ -11,7 +11,7 @@ error in the status panel.
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Callable, Protocol
 
 
 class VirtualGamepad(Protocol):
@@ -24,6 +24,7 @@ class VirtualGamepad(Protocol):
     def update(self) -> None: ...
     def reset(self) -> None: ...
     def close(self) -> None: ...
+    def register_rumble(self, callback: "Callable[[int, int], None]") -> None: ...
     @property
     def available(self) -> bool: ...
     @property
@@ -55,6 +56,7 @@ class NullGamepad:
     def update(self) -> None: pass
     def reset(self) -> None: pass
     def close(self) -> None: pass
+    def register_rumble(self, callback: Callable[[int, int], None]) -> None: pass
 
     @property
     def available(self) -> bool: return False
@@ -152,6 +154,24 @@ class ViGEmX360Gamepad:
         try:
             self.reset()
         except Exception:
+            pass
+
+    def register_rumble(self, callback: Callable[[int, int], None]) -> None:
+        """Register a callback that receives (large_motor, small_motor) values
+        whenever a game writes XInput vibration to the virtual pad.
+
+        Each value is 0..255. The callback runs on vgamepad's notification
+        thread — keep it short and thread-safe.
+        """
+        def _on_notification(client, target, large_motor, small_motor, led_number, user_data):
+            try:
+                callback(int(large_motor), int(small_motor))
+            except Exception:
+                pass
+        try:
+            self._pad.register_notification(callback_function=_on_notification)
+        except Exception:
+            # Older vgamepad versions may name this differently — degrade silently.
             pass
 
     @property

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: ViGEmBus driver issues
+    url: https://github.com/nefarius/ViGEmBus/issues
+    about: SteamPad Bridge depends on the ViGEmBus driver. Driver-level issues belong upstream.
+  - name: SDL Triton driver
+    url: https://github.com/libsdl-org/SDL/blob/main/src/joystick/hidapi/SDL_hidapi_steam_triton.c
+    about: The authoritative source for the new Steam Controller protocol — useful if you're proposing a protocol-level change.

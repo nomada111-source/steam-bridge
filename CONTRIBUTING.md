@@ -1,7 +1,6 @@
 # Contributing to SteamPad Bridge
 
-Thanks for considering a contribution. This is a tool that reverse-engineers a
-non-public HID protocol, so contributions of test data are as valuable as code.
+Thanks for considering a contribution.
 
 ## Quick start
 
@@ -14,37 +13,36 @@ python -m tests.smoke_test
 ```
 
 Tests must pass before a PR is merged. The smoke test asserts against real
-captured HID frames — those assertions catch regressions when the protocol
-mappings are edited.
+captured HID frames and against SDL's published bit map — those assertions
+catch regressions when the protocol mappings are edited.
 
-## Most useful contributions
+## High-leverage contributions
 
-1. **More device captures.** If you have hardware behaviour that differs from
-   the reference (a different controller revision, a paired Steam Frame, etc.),
-   run the GUI's **Capture now** flow for each button and paste the output in
-   an issue. We update `PUCK_BUTTON_BITS` (`src/protocol.py`) accordingly.
-2. **Identify unmapped inputs.** LSCLICK/RSCLICK distinct bits, stick-click
-   pressure, capacitive-touch indicators — anything not yet locked down. The
-   "byte-level diff" output from the capture tool makes this a short job.
-3. **Output reports.** Rumble (haptics) and LED control. Valve devices accept
-   feature reports via report id `0x87` followed by setting/sub-command bytes.
-   Steam Deck rumble uses a per-side amplitude+duration payload; the new
-   controller's wire format here is unverified.
-4. **Gyro / accelerometer decode.** Raw IMU bytes sit mixed with stick data
-   in bytes 0x0a–0x1f; tease them out and route to virtual right-stick or to
-   a configurable mouse-style output.
-5. **Auto profile switching.** Watch the foreground process and load a
-   matching profile from `profiles/<exe-name>.json`.
+1. **Hardware compatibility reports.** Even "everything works" reports help.
+   File one through the
+   [hardware-compatibility issue template](.github/ISSUE_TEMPLATE/hardware_compatibility.yml).
+2. **Confirm or refine button mapping** on revisions other than the reference.
+   Reproduce a discrepancy, paste the symptom, and we'll update
+   `PUCK_BUTTON_BITS` in `src/protocol.py`.
+3. **Rumble pattern improvements.** The current `rumble.py` uses
+   `ID_TRIGGER_HAPTIC_PULSE` with conservative parameters. The new
+   controller has richer haptic capability — see
+   [SDL PR #15558](https://discourse.libsdl.org/t/sdl-fix-steam-controller-2026-triton-rumble-15558/67844)
+   for clues on the wire format.
+4. **LED control.** SDL has LED report constants; we don't expose them yet.
+5. **Auto-profile improvements.** Currently matches `profiles/<exe>.json`
+   exactly; could add glob patterns or window-title matching.
+6. **Better gyro modes.** Right-stick override is the simplest; "flick stick",
+   "ratchet" modes etc. are well-documented in Steam Input docs.
 
 ## Style
 
-- Standard library + the three deps listed in `requirements.txt`. Don't add
-  more without a good reason — this is a small tool, not a framework.
-- Type hints on public surfaces. No mypy gate yet but the existing code uses
-  them.
-- Match existing comment style: explain *why*, not what.
-- New parser bit mappings go in `PUCK_BUTTON_BITS` with a comment citing the
-  capture that confirmed it.
+- Standard library + the deps in `requirements.txt`. Don't add more without
+  a strong reason — this is a small tool, not a framework.
+- Type hints on public surfaces.
+- Match the existing comment style: explain *why*, not what.
+- Cite sources (SDL file, Linux driver, capture, etc.) when adding protocol
+  knowledge.
 
 ## Testing your changes
 
@@ -52,25 +50,18 @@ mappings are edited.
 python -m tests.smoke_test
 ```
 
-There are 40+ checks including:
+50+ checks covering: every confirmed Puck button bit, analog triggers
+normalising 0..0x7fff → 0.0..1.0, all four stick axes, the regression guard
+that "right-stick TOUCH does NOT register as RSCLICK", and the legacy Steam
+Deck format. Add a `check(...)` line for any new bit you map.
 
-- All currently-mapped Puck buttons decode their bit correctly.
-- Analog triggers normalize 0..0x7fff → 0.0..1.0.
-- Stick offsets translate correctly to ControllerState.
-- The byte 0x04 bit 4 "right-stick touched" indicator does NOT register as
-  RSCLICK (regression guard).
-- Real captured idle frame from the reference hardware parses cleanly.
-
-If you add a new mapping, add a corresponding `check(...)` line so it's locked
-in.
+```powershell
+python -m src.selftest        # confirms the ViGEmBus side without the controller
+python -m src.probe --verbose # scans HID interfaces, press a button while it runs
+```
 
 ## Filing an issue
 
-Please include:
-
-- Your controller's PID (visible in the Device tab dropdown).
-- The output of `python -m src.probe --verbose` (with a button pressed during
-  the scan).
-- The status log from the GUI (right-click the log → copy).
-- For wrong/missing button mappings: the full `capture_<button>.txt` file
-  written by the **Capture now** flow.
+Use the dedicated templates under **Issues → New** rather than blank issues.
+Include your controller's PID (visible in the Controller dropdown), the
+status log from the GUI's top bar, and the SteamPad Bridge version number.
